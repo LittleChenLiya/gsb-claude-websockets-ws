@@ -65,6 +65,9 @@
   - [WS_ERR_TOO_MANY_BUFFERED_PARTS](#ws_err_too_many_buffered_parts)
   - [WS_ERR_UNSUPPORTED_DATA_PAYLOAD_LENGTH](#ws_err_unsupported_data_payload_length)
   - [WS_ERR_UNSUPPORTED_MESSAGE_LENGTH](#ws_err_unsupported_message_length)
+  - [WS_ERR_DECOMPRESSED_MESSAGE_BUDGET_EXCEEDED](#ws_err_decompressed_message_budget_exceeded)
+  - [WS_ERR_CONNECTION_BUDGET_EXCEEDED](#ws_err_connection_budget_exceeded)
+- [Receive budget rules](#receive-budget-rules)
 
 ## Class: WebSocketServer
 
@@ -90,6 +93,14 @@ This class represents a WebSocket server. It extends the `EventEmitter`.
   - `maxBufferedChunks` {Number} The maximum number of buffered data chunks. The
     value is coerced to a 32-bit signed integer. Defaults to 262144. Set to 0 to
     disable the limit.
+  - `maxConnectionBytes` {Number} The maximum number of decompressed message
+    bytes a connection may receive in total. The value is coerced to a 32-bit
+    signed integer. Defaults to 0. Set to 0 to disable the limit. See the
+    [receive budget rules](#receive-budget-rules) below.
+  - `maxDecompressedMessageBytes` {Number} The maximum allowed decompressed
+    message size in bytes. The value is coerced to a 32-bit signed integer.
+    Defaults to 0. Set to 0 to disable the limit. See the
+    [receive budget rules](#receive-budget-rules) below.
   - `maxFragments` {Number} The maximum number of fragments in a message. The
     value is coerced to a 32-bit signed integer. Defaults to 16384. Set to 0 to
     disable the limit.
@@ -332,6 +343,14 @@ This class represents a WebSocket. It extends the `EventEmitter`.
   - `maxBufferedChunks` {Number} The maximum number of buffered data chunks. The
     value is coerced to a 32-bit signed integer. Defaults to 262144. Set to 0 to
     disable the limit.
+  - `maxConnectionBytes` {Number} The maximum number of decompressed message
+    bytes the connection may receive in total. The value is coerced to a 32-bit
+    signed integer. Defaults to 0. Set to 0 to disable the limit. See the
+    [receive budget rules](#receive-budget-rules) below.
+  - `maxDecompressedMessageBytes` {Number} The maximum allowed decompressed
+    message size in bytes. The value is coerced to a 32-bit signed integer.
+    Defaults to 0. Set to 0 to disable the limit. See the
+    [receive budget rules](#receive-budget-rules) below.
   - `maxFragments` {Number} The maximum number of fragments in a message. The
     value is coerced to a 32-bit signed integer. Defaults to 16384. Set to 0 to
     disable the limit.
@@ -721,6 +740,45 @@ A data frame was received with a length longer than the max supported length
 
 A message was received with a length longer than the maximum supported length,
 as configured by the `maxPayload` option.
+
+### WS_ERR_DECOMPRESSED_MESSAGE_BUDGET_EXCEEDED
+
+A message was received whose decompressed length is longer than the maximum
+allowed length, as configured by the `maxDecompressedMessageBytes` option.
+
+### WS_ERR_CONNECTION_BUDGET_EXCEEDED
+
+A message was received that pushes the total number of decompressed message
+bytes received on the connection past the maximum allowed amount, as configured
+by the `maxConnectionBytes` option.
+
+## Receive budget rules
+
+The `maxDecompressedMessageBytes` and `maxConnectionBytes` options form an
+optional receive budget layer that complements `maxPayload`. Both default to 0,
+which disables them and preserves the default receiving behavior. The rules are:
+
+- Budgets are measured in decompressed bytes. For a compressed message this is
+  the size of the inflation output, not the length of the compressed frame
+  payloads. For an uncompressed message it is the message length itself.
+- All fragments of a fragmented message share the same per-message budget: the
+  decompressed bytes of every fragment are added to a single per-message
+  counter.
+- Control frames (ping, pong, and close) are not business content and do not
+  consume either budget.
+- The `maxConnectionBytes` counter is cumulative per connection and is
+  incremented only after a message has been successfully received and emitted.
+  Failed messages (for example messages that exceed a budget, fail
+  decompression, or fail UTF-8 validation) do not increase it.
+- Both budgets are enforced while compressed data is being decompressed, so an
+  over-budget message is rejected before its full decompressed output is
+  buffered.
+- When a budget is exceeded, no part of the offending message is delivered to
+  the `'message'` listeners and the connection is closed with status code 1009.
+  The emitted error has code `WS_ERR_DECOMPRESSED_MESSAGE_BUDGET_EXCEEDED` or
+  `WS_ERR_CONNECTION_BUDGET_EXCEEDED` depending on which budget was exceeded, so
+  each limit reports its own reason. The `maxPayload` limit keeps reporting
+  `WS_ERR_UNSUPPORTED_MESSAGE_LENGTH`.
 
 [concurrency-limit]: https://github.com/websockets/ws/issues/1202
 [duplex-options]:
