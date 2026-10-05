@@ -46,6 +46,7 @@
   - [websocket.removeEventListener(type, listener)](#websocketremoveeventlistenertype-listener)
   - [websocket.resume()](#websocketresume)
   - [websocket.send(data[, options][, callback])](#websocketsenddata-options-callback)
+  - [websocket.sendGroup(producer[, options][, callback])](#websocketsendgroupproducer-options-callback)
   - [websocket.terminate()](#websocketterminate)
   - [websocket.url](#websocketurl)
 - [createWebSocketStream(websocket[, options])](#createwebsocketstreamwebsocket-options)
@@ -634,6 +635,36 @@ only removes listeners added with
 
 Send `data` through the connection. This method throws an error if the ready
 state is `CONNECTING`.
+
+### websocket.sendGroup(producer[, options][, callback])
+
+- `producer` {Function|Object} A function returning an iterable or async
+  iterable of fragments, or such an iterable directly. Each fragment is a
+  {String|ArrayBuffer|Buffer|DataView|TypedArray|Number}.
+- `options` {Object}
+  - `binary` {Boolean} Specifies whether the message should be sent as binary or
+    not. Defaults to the type of the first fragment.
+  - `signal` {AbortSignal} A signal that can be used to abort the group.
+- `callback` {Function} An optional callback which is invoked when the last
+  fragment is written out. If an error occurs, the callback is called with the
+  error as its first argument.
+
+Send a single data message whose fragments are produced asynchronously.
+
+Groups are sent one at a time, in the order they were queued: the fragments of
+one message are never interleaved with the fragments of another message. Control
+frames (ping, pong, close) may still be injected between the fragments of a
+message, as allowed by RFC 6455.
+
+If the producer throws or rejects, or the group is aborted via `signal`, the
+connection is closed without sending the final fragment, so the peer never sees
+a pseudo-complete message. Groups that have not started yet are discarded and
+their callbacks are called with an error. Once the connection is no longer
+`OPEN`, new groups are rejected.
+
+The callback only signals that the fragments have been written to the underlying
+socket. It does not mean that the peer has received or acknowledged the message.
+This method throws an error if the ready state is `CONNECTING`.
 
 ### websocket.terminate()
 
