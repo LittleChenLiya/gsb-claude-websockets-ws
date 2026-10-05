@@ -40,7 +40,8 @@
   "scripts": {
     "test": "nyc --reporter=lcov --reporter=text mocha --throw-deprecation test/*.test.js",
     "integration": "mocha --throw-deprecation test/*.integration.js",
-    "lint": "eslint . && prettier --check --ignore-path .gitignore \"**/*.{json,md,yaml,yml}\""
+    "lint": "eslint . && prettier --check --ignore-path .gitignore \"**/*.{json,md,yaml,yml}\"",
+    "loopback": "node examples/data-sender-loopback.js"
   },
   "peerDependencies": {
     "bufferutil": "^4.0.1",
