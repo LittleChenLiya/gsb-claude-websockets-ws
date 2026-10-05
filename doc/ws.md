@@ -53,6 +53,7 @@
   - [WS_NO_BUFFER_UTIL](#ws_no_buffer_util)
   - [WS_NO_UTF_8_VALIDATE](#ws_no_utf_8_validate)
 - [Error codes](#error-codes)
+  - [Error location](#error-location)
   - [WS_ERR_EXPECTED_FIN](#ws_err_expected_fin)
   - [WS_ERR_EXPECTED_MASK](#ws_err_expected_mask)
   - [WS_ERR_INVALID_CLOSE_CODE](#ws_err_invalid_close_code)
@@ -670,6 +671,54 @@ from being required.
 
 Errors emitted by the websocket may have a `.code` property, describing the
 specific type of error that has occurred:
+
+### Error location
+
+Errors emitted while parsing received frames also carry the following
+properties, which explicitly locate the error in the received byte stream:
+
+- `frameIndex` {Number} The 0-based sequence number of the frame being parsed
+  when the error occurred. Control frames have an independent identity: a ping
+  or pong interleaved in a fragmented message gets its own sequence number.
+- `field` {String} The frame field that caused the error. One of `'rsv'`,
+  `'fin'`, `'opcode'`, `'mask'`, `'payload-length'`, `'payload'`, or `'buffer'`
+  (the error is about internal buffering, not a frame field).
+- `byteOffset` {Number} The absolute offset, in bytes from the first byte
+  written to the receiver, of the field that caused the error. The offset does
+  not depend on how the data is chunked into writes.
+- `payloadLength` {Number} Only set for permessage-deflate decompression errors:
+  the cumulative length of the message's encoded payload. In this case
+  `byteOffset` is the offset of the first byte of the encoded payload. The error
+  cannot be located more precisely within the compressed data, so no offset
+  inside the payload is reported.
+
+Payload bytes are never stored on the error. For errors that are only detected
+after a whole message is reassembled (for example `WS_ERR_INVALID_UTF8`),
+`byteOffset` points to the first payload byte of the message.
+
+Example, using small frames and Node.js:
+
+```js
+const { Receiver } = require('ws');
+
+const receiver = new Receiver();
+
+receiver.on('error', (err) => {
+  console.log(err.code); // 'WS_ERR_UNEXPECTED_RSV_2_3'
+  console.log(err.field); // 'rsv'
+  console.log(err.frameIndex); // 1
+  console.log(err.byteOffset); // 3
+});
+
+// A text frame ("a") followed by a frame with the RSV2 bit set.
+receiver.write(Buffer.from([0x81, 0x01, 0x61, 0xa2, 0x00]));
+```
+
+The focused tests for this behavior can be run with:
+
+```console
+$ npx mocha test/receiver.test.js --grep "error location"
+```
 
 ### WS_ERR_EXPECTED_FIN
 

@@ -1299,4 +1299,165 @@ describe('Receiver', () => {
       receiver.write(Buffer.from('82008200', 'hex'));
     });
   });
+
+  describe('error location reporting', () => {
+    it('reports the same location for a bad RSV header regardless of chunking', (done) => {
+      // Frame 0: text message "a" (`81 01 61`). Frame 1: RSV2 set (`a2 00`).
+      const data = Buffer.from([0x81, 0x01, 0x61, 0xa2, 0x00]);
+
+      function run(write, cb) {
+        const receiver = new Receiver();
+
+        receiver.on('error', (err) => {
+          cb({
+            byteOffset: err.byteOffset,
+            code: err.code,
+            field: err.field,
+            frameIndex: err.frameIndex,
+            statusCode: err[kStatusCode]
+          });
+        });
+
+        write(receiver);
+      }
+
+      run(
+        (receiver) => receiver.write(data),
+        (whole) => {
+          run(
+            (receiver) => {
+              for (const byte of data) receiver.write(Buffer.from([byte]));
+            },
+            (chunked) => {
+              assert.deepStrictEqual(chunked, whole);
+              assert.deepStrictEqual(whole, {
+                byteOffset: 3,
+                code: 'WS_ERR_UNEXPECTED_RSV_2_3',
+                field: 'rsv',
+                frameIndex: 1,
+                statusCode: 1002
+              });
+              done();
+            }
+          );
+        }
+      );
+    });
+
+    it('locates only the encoded payload span for decompression errors', (done) => {
+      const perMessageDeflate = new PerMessageDeflate();
+      perMessageDeflate.accept([{}]);
+
+      const receiver = new Receiver({
+        extensions: {
+          'permessage-deflate': perMessageDeflate
+        }
+      });
+      let messageEmitted = false;
+
+      receiver.on('message', () => {
+        messageEmitted = true;
+      });
+
+      receiver.on('error', (err) => {
+        assert.strictEqual(err.field, 'payload');
+        assert.strictEqual(err.frameIndex, 0);
+        assert.strictEqual(err.byteOffset, 2);
+        assert.strictEqual(err.payloadLength, 5);
+        assert.ok(!messageEmitted);
+        done();
+      });
+
+      // Compressed text frame (`c1`) with 5 bytes of invalid deflate data.
+      receiver.write(Buffer.from([0xc1, 0x05, 0x07, 0x07, 0x07, 0x07, 0x07]));
+    });
+
+    it('locates the 64-bit payload length field spanning chunks', (done) => {
+      // Binary frame with a 64-bit payload length of 2^53 (> 2^53 - 1).
+      const header = Buffer.from([
+        0x82, 0x7f, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+      ]);
+
+      function run(chunks, cb) {
+        const receiver = new Receiver();
+
+        receiver.on('error', (err) => {
+          cb({
+            byteOffset: err.byteOffset,
+            code: err.code,
+            field: err.field,
+            frameIndex: err.frameIndex
+          });
+        });
+
+        for (const chunk of chunks) receiver.write(chunk);
+      }
+
+      run([header], (whole) => {
+        run([header.subarray(0, 5), header.subarray(5)], (split) => {
+          assert.deepStrictEqual(split, whole);
+          assert.deepStrictEqual(whole, {
+            byteOffset: 2,
+            code: 'WS_ERR_UNSUPPORTED_DATA_PAYLOAD_LENGTH',
+            field: 'payload-length',
+            frameIndex: 0
+          });
+          done();
+        });
+      });
+    });
+
+    it('locates the 16-bit payload length field spanning chunks', (done) => {
+      const receiver = new Receiver({ maxPayload: 10 });
+
+      receiver.on('error', (err) => {
+        assert.strictEqual(err.code, 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH');
+        assert.strictEqual(err.field, 'payload-length');
+        assert.strictEqual(err.frameIndex, 0);
+        assert.strictEqual(err.byteOffset, 2);
+        done();
+      });
+
+      // Binary frame with a 16-bit payload length of 100, split mid-field.
+      receiver.write(Buffer.from([0x82, 0x7e, 0x00]));
+      receiver.write(Buffer.from([0x64]));
+    });
+
+    it('gives control frames an independent frame identity', (done) => {
+      const receiver = new Receiver();
+      const events = [];
+
+      receiver.on('ping', (data) => events.push(['ping', data]));
+      receiver.on('message', (data, isBinary) =>
+        events.push(['message', data, isBinary])
+      );
+
+      receiver.on('error', (err) => {
+        assert.strictEqual(err.code, 'WS_ERR_UNEXPECTED_RSV_2_3');
+        assert.strictEqual(err.field, 'rsv');
+        assert.strictEqual(err.frameIndex, 3);
+        assert.strictEqual(err.byteOffset, 8);
+        assert.deepStrictEqual(events, [
+          ['ping', EMPTY_BUFFER],
+          ['message', Buffer.from('ab'), false]
+        ]);
+        done();
+      });
+
+      receiver.write(
+        Buffer.from([
+          0x01,
+          0x01,
+          0x61, // Frame 0: text fragment "a" (FIN clear).
+          0x89,
+          0x00, // Frame 1: ping.
+          0x80,
+          0x01,
+          0x62, // Frame 2: continuation "b" (FIN set).
+          0xa2,
+          0x00 // Frame 3: RSV2 set.
+        ])
+      );
+    });
+  });
 });
